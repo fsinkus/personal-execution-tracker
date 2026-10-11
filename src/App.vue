@@ -1,6 +1,6 @@
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const menuRecolhido = ref(false)
 const dias = [
@@ -20,6 +20,67 @@ const atividades = ref([
   { id: 4, nome: 'DevOps', dia: 'Quinta', icone: '💻', concluida: false }
 ])
 
+const mostrarFormulario = ref(false)
+
+const novaAtividade = ref({
+  nome: '',
+  dia: 'Segunda',
+  icone: '📌',
+})
+
+function adicionarAtividade() {
+  const nome = novaAtividade.value.nome.trim()
+
+  if (!nome) return
+
+  atividades.value.push({
+    id: Date.now(),
+    nome,
+    dia: novaAtividade.value.dia,
+    icone: novaAtividade.value.icone,
+    concluida: false,
+  })
+
+ novaAtividade.value.nome = ''
+novaAtividade.value.icone = '📌'
+mostrarFormulario.value = false
+}
+
+function excluirAtividade(id: number) {
+  const confirmar = window.confirm(
+    'Deseja realmente excluir esta atividade?'
+  )
+
+  if (!confirmar) return
+
+  atividades.value = atividades.value.filter(
+    atividade => atividade.id !== id
+  )
+}
+const atividadesSalvas = localStorage.getItem('atividades-semanais')
+
+if (atividadesSalvas) {
+  try {
+    const dados = JSON.parse(atividadesSalvas)
+
+    if (Array.isArray(dados)) {
+      atividades.value = dados
+    }
+  } catch (erro) {
+    console.error('Erro ao carregar atividades:', erro)
+  }
+}
+
+watch(
+  atividades,
+  (novasAtividades) => {
+    localStorage.setItem(
+      'atividades-semanais',
+      JSON.stringify(novasAtividades)
+    )
+  },
+  { deep: true }
+)
 const metaSemanal = 12
 
 const pontos = computed(() =>
@@ -93,6 +154,49 @@ function desfazer(id: number) {
           <h1>Meu quadro semanal</h1>
           <p>Pequenas ações, grandes resultados.</p>
         </div>
+        <button class="botao-nova-atividade" @click="mostrarFormulario = !mostrarFormulario">
+  + Nova atividade
+</button>
+
+<div v-if="mostrarFormulario" class="formulario-atividade">
+  <input
+    v-model="novaAtividade.nome"
+    type="text"
+    placeholder="Nome da atividade"
+    @keyup.enter="adicionarAtividade"
+  />
+
+  <select v-model="novaAtividade.dia">
+    <option
+      v-for="dia in dias"
+      :key="dia.nome"
+      :value="dia.nome"
+    >
+      {{ dia.nome }}
+    </option>
+  </select>
+
+   <select v-model="novaAtividade.icone" aria-label="Ícone da atividade">
+  <option value="📌">📌 Geral</option>
+  <option value="🏋️">🏋️ Academia</option>
+  <option value="📘">📘 Estudos</option>
+  <option value="🎓">🎓 Faculdade</option>
+  <option value="💻">💻 Programação</option>
+  <option value="🎸">🎸 Música</option>
+  <option value="📚">📚 Leitura</option>
+  <option value="🚶">🚶 Caminhada</option>
+  <option value="💼">💼 Trabalho</option>
+  <option value="🧠">🧠 Desenvolvimento</option>
+</select>
+
+  <button @click="adicionarAtividade">
+    Adicionar
+  </button>
+
+  <button @click="mostrarFormulario = false">
+    Cancelar
+  </button>
+</div>
 
         <div class="progresso">
           <div
@@ -143,6 +247,14 @@ function desfazer(id: number) {
                   {{ atividade.nome }}
                 </span>
                 <span class="cartao-check"></span>
+                <button
+  class="botao-excluir"
+  title="Excluir atividade"
+  aria-label="Excluir atividade"
+  @click.stop="excluirAtividade(atividade.id)"
+>
+  ×
+</button>
               </button>
             </div>
           </div>
@@ -682,6 +794,86 @@ function desfazer(id: number) {
 
 .sidebar-recolhida .temporada {
   display: none;
+}
+.botao-nova-atividade {
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.botao-nova-atividade:hover {
+  background: #1d4ed8;
+}
+
+.formulario-atividade {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 16px;
+  margin-bottom: 18px;
+  background: #f4f7fc;
+  border: 1px solid #e3e9f3;
+  border-radius: 14px;
+}
+
+.formulario-atividade input,
+.formulario-atividade select {
+  padding: 10px 12px;
+  border: 1px solid #d8e1ed;
+  border-radius: 8px;
+  background: white;
+  color: #25334c;
+}
+
+.formulario-atividade button {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #e3e9f3;
+  color: #25334c;
+  font-weight: 700;
+}
+
+.formulario-atividade button:first-of-type {
+  background: #21bf91;
+  color: white;
+}
+
+.cartao {
+  position: relative;
+}
+
+.botao-excluir {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: 0.2s;
+}
+
+.cartao:hover .botao-excluir,
+.botao-excluir:focus-visible {
+  opacity: 1;
+}
+
+.botao-excluir:hover {
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 </style>
