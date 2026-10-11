@@ -1,6 +1,26 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+const diaEmDestaque = ref<string | null>(null)
+const atividadeArrastada = ref<number | null>(null)
+
+function iniciarArraste(id: number) {
+  atividadeArrastada.value = id
+}
+
+function soltarAtividade(diaDestino: string) {
+  if (atividadeArrastada.value === null) return
+
+  const atividade = atividades.value.find(
+    a => a.id === atividadeArrastada.value
+  )
+
+  if (atividade && !atividade.concluida) {
+    atividade.dia = diaDestino
+  }
+
+  atividadeArrastada.value = null
+}
 
 const menuRecolhido = ref(false)
 const dias = [
@@ -45,6 +65,7 @@ function adicionarAtividade() {
 novaAtividade.value.icone = '📌'
 mostrarFormulario.value = false
 }
+
 
 function excluirAtividade(id: number) {
   const confirmar = window.confirm(
@@ -222,43 +243,57 @@ function desfazer(id: number) {
         </div>
 
         <div class="quadro">
-          <div
-            v-for="dia in dias"
-            :key="dia.nome"
-            class="coluna"
-          >
-            <div class="coluna-cabecalho">
-              <strong>{{ dia.nome }}</strong>
-            </div>
+  <div
+    v-for="dia in dias"
+    :key="dia.nome"
+    class="coluna"
+  >
+    <div class="coluna-cabecalho">
+      <strong>{{ dia.nome }}</strong>
+    </div>
 
-            <div class="coluna-corpo">
-              <button
-                v-for="atividade in atividades.filter(
-                  a => a.dia === dia.nome && !a.concluida
-                )"
-                :key="atividade.id"
-                class="cartao"
-                @click="concluir(atividade.id)"
-              >
-                <span class="cartao-icone">
-                  {{ atividade.icone }}
-                </span>
-                <span class="cartao-nome">
-                  {{ atividade.nome }}
-                </span>
-                <span class="cartao-check"></span>
-                <button
-  class="botao-excluir"
-  title="Excluir atividade"
-  aria-label="Excluir atividade"
-  @click.stop="excluirAtividade(atividade.id)"
+    <div
+     <div
+  class="coluna-corpo"
+  :class="{ 'coluna-destaque': diaEmDestaque === dia.nome }"
+  @dragover.prevent="diaEmDestaque = dia.nome"
+  @dragleave.self="diaEmDestaque = null"
+  @drop.prevent="soltarAtividade(dia.nome); diaEmDestaque = null"
 >
-  ×
-</button>
-              </button>
-            </div>
-          </div>
-        </div>
+      <div
+        v-for="atividade in atividades.filter(
+          a => a.dia === dia.nome && !a.concluida
+        )"
+        :key="atividade.id"
+        class="cartao"
+        draggable="true"
+        @dragstart="iniciarArraste(atividade.id)"
+        @dragend="atividadeArrastada = null"
+        @click="concluir(atividade.id)"
+      >
+        <span class="cartao-icone">
+          {{ atividade.icone }}
+        </span>
+
+        <span class="cartao-nome">
+          {{ atividade.nome }}
+        </span>
+
+        <span class="cartao-check"></span>
+
+        <button
+          type="button"
+          class="botao-excluir"
+          title="Excluir atividade"
+          aria-label="Excluir atividade"
+          @click.stop="excluirAtividade(atividade.id)"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
       </section>
 
       <section class="done">
@@ -874,6 +909,29 @@ function desfazer(id: number) {
 .botao-excluir:hover {
   background: #fee2e2;
   color: #dc2626;
+}
+.cartao {
+  cursor: grab;
+  user-select: none;
+}
+
+.cartao:active {
+  cursor: grabbing;
+}
+
+.coluna-corpo {
+  min-height: 160px;
+}
+
+.coluna-corpo {
+  transition: background-color 0.2s ease;
+  border-radius: 12px;
+}
+
+.coluna-corpo.coluna-destaque {
+  background: #eaf2ff;
+  outline: 2px dashed #93b4f5;
+  outline-offset: -2px;
 }
 
 </style>
