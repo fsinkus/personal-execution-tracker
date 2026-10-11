@@ -1,6 +1,9 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+
+
+
 const diaEmDestaque = ref<string | null>(null)
 const atividadeArrastada = ref<number | null>(null)
 
@@ -23,6 +26,48 @@ function soltarAtividade(diaDestino: string) {
 }
 
 const menuRecolhido = ref(false)
+const semanaAtual = ref(1)
+const temporadaAtual = ref(1)
+
+// A primeira temporada começa em 12/10/2026
+const inicioTemporada = new Date(2026, 9, 12)
+
+// Calcula as datas de cada semana
+function periodoDaSemana(semana: number) {
+  const inicio = new Date(inicioTemporada)
+  inicio.setDate(inicio.getDate() + (semana - 1) * 7)
+
+  const fim = new Date(inicio)
+  fim.setDate(fim.getDate() + 6)
+
+  const formatar = (data: Date) =>
+    data.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: 'short'
+    })
+
+  return `${formatar(inicio)} – ${formatar(fim)}`
+}
+
+// Descobre qual semana corresponde à data de hoje
+function calcularSemanaAtual() {
+  const hoje = new Date()
+
+  const diferencaDias = Math.floor(
+    (
+      Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()) -
+      Date.UTC(2026, 9, 12)
+    ) / 86400000
+  )
+
+  const semana = Math.floor(diferencaDias / 7) + 1
+
+  return Math.max(1, Math.min(semana, 8))
+}
+
+// Seleciona a semana correta antes de carregar as atividades
+semanaAtual.value = calcularSemanaAtual()
+
 const dias = [
   { nome: 'Segunda', curto: 'Seg' },
   { nome: 'Terça', curto: 'Ter' },
@@ -78,31 +123,113 @@ function excluirAtividade(id: number) {
     atividade => atividade.id !== id
   )
 }
-const atividadesSalvas = localStorage.getItem('atividades-semanais')
+// Identifica o armazenamento de cada semana e temporada
+function chaveDaSemana(temporada: number, semana: number) {
+  return `atividades-t${temporada}-s${semana}`
+}
 
-if (atividadesSalvas) {
+// Recupera as atividades salvas de uma semana
+function carregarAtividades(temporada: number, semana: number) {
+  const dadosSalvos = localStorage.getItem(
+    chaveDaSemana(temporada, semana)
+  )
+
+  if (!dadosSalvos) return []
+
   try {
-    const dados = JSON.parse(atividadesSalvas)
-
-    if (Array.isArray(dados)) {
-      atividades.value = dados
-    }
+    const dados = JSON.parse(dadosSalvos)
+    return Array.isArray(dados) ? dados : []
   } catch (erro) {
     console.error('Erro ao carregar atividades:', erro)
+    return []
   }
 }
 
+// Migra os dados antigos para a primeira semana
+const chaveAntiga = 'atividades-semanais'
+const chavePrimeiraSemana = chaveDaSemana(1, 1)
+
+if (
+  localStorage.getItem(chavePrimeiraSemana) === null &&
+  localStorage.getItem(chaveAntiga) !== null
+) {
+  localStorage.setItem(
+    chavePrimeiraSemana,
+    localStorage.getItem(chaveAntiga)!
+  )
+}
+
+// Carrega a semana inicial
+atividades.value = carregarAtividades(
+  temporadaAtual.value,
+  semanaAtual.value
+)
+
+// Salva automaticamente as alterações
 watch(
   atividades,
   (novasAtividades) => {
     localStorage.setItem(
-      'atividades-semanais',
+      chaveDaSemana(temporadaAtual.value, semanaAtual.value),
       JSON.stringify(novasAtividades)
     )
   },
   { deep: true }
 )
 const metaSemanal = 12
+
+const pads = [
+  {
+    codigo: 'PAD-003',
+    frase: 'Resultado é retorno repetido ao procedimento.'
+  },
+  {
+    codigo: 'PAD-019',
+    frase: 'Ativos intelectuais produzem patrimônio composto.'
+  },
+  {
+    codigo: 'PAD-020',
+    frase: 'Mantenha o Rumo e a Chegada Será Inevitável.'
+  }
+]
+
+const indiceSalvo = Number(localStorage.getItem('ultimo-pad-exibido') ?? '-1')
+
+const proximoIndice = Number.isInteger(indiceSalvo)
+  ? (indiceSalvo + 1) % pads.length
+  : 0
+
+const padAtual = ref(pads[proximoIndice]!)
+
+localStorage.setItem('ultimo-pad-exibido', String(proximoIndice))
+
+function mudarSemana(novaSemana: number) {
+  if (novaSemana < 1 || novaSemana > 8) return
+
+  // Salva os dados da semana que estamos deixando
+  localStorage.setItem(
+    chaveDaSemana(temporadaAtual.value, semanaAtual.value),
+    JSON.stringify(atividades.value)
+  )
+
+  // Recupera os dados da semana de destino
+  const atividadesDestino = carregarAtividades(
+    temporadaAtual.value,
+    novaSemana
+  )
+
+  // Atualiza a semana antes de carregar suas atividades
+  semanaAtual.value = novaSemana
+  atividades.value = atividadesDestino
+}
+
+function proximaSemana() {
+  mudarSemana(semanaAtual.value + 1)
+}
+
+function semanaAnterior() {
+  mudarSemana(semanaAtual.value - 1)
+}
 
 const pontos = computed(() =>
   atividades.value.filter(a => a.concluida).length
@@ -162,16 +289,19 @@ function desfazer(id: number) {
       </nav>
 
       <div class="temporada">
-        <small>TEMPORADA ATUAL</small>
-        <strong>Temporada 1</strong>
-        <span>Semana 1 de 8</span>
-      </div>
+  <small>TEMPORADA ATUAL</small>
+  <strong>Temporada {{ temporadaAtual }}</strong>
+  <span>Semana {{ semanaAtual }} de 8</span>
+</div>
     </aside>
 
     <main class="conteudo">
       <header class="cabecalho">
+        
         <div>
-          <span class="etiqueta">TEMPORADA 1 · SEMANA 1</span>
+          <span class="etiqueta">
+  TEMPORADA {{ temporadaAtual }} · SEMANA {{ semanaAtual }}
+</span>
           <h1>Meu quadro semanal</h1>
           <p>Pequenas ações, grandes resultados.</p>
         </div>
@@ -219,29 +349,98 @@ function desfazer(id: number) {
   </button>
 </div>
 
-        <div class="progresso">
-          <div
-            class="anel"
-            :style="{ '--progresso': progresso + '%' }"
-          >
-            <div class="anel-centro">
-              <strong>{{ pontos }}/{{ metaSemanal }}</strong>
-              <small>pontos</small>
-            </div>
-          </div>
-          <div class="progresso-texto">
-            <strong>Seu progresso</strong>
-            <span>Continue avançando!</span>
-          </div>
-        </div>
+        
       </header>
 
       <section class="secao">
-        <div class="secao-titulo">
-          <h2>Planejamento da semana</h2>
-          <span>{{ atividades.length }} atividades</span>
+  <div class="faixa-destaques">
+
+    <!-- PROGRESSO SEMANAL -->
+    <div class="progresso">
+      <div
+        class="anel"
+        :style="{ '--progresso': progresso + '%' }"
+      >
+        <div class="anel-centro">
+          <strong>{{ pontos }}/{{ metaSemanal }}</strong>
+          <small>pontos</small>
+        </div>
+      </div>
+
+      <div class="progresso-texto">
+        <strong>Seu progresso semanal</strong>
+        <span>Continue avançando!</span>
+      </div>
+    </div>
+
+    <!-- PAD ROTATIVO -->
+    <div class="cartao-pad">
+      <span class="pad-codigo">{{ padAtual.codigo }}</span>
+      <p class="pad-frase">{{ padAtual.frase }}</p>
+    </div>
+
+    <!-- SELETOR DE SEMANAS -->
+    <div class="navegacao-semanas">
+      <button
+        class="seta-semana"
+        @click="semanaAnterior"
+        :disabled="semanaAtual === 1"
+      >
+        ←
+      </button>
+
+      <div class="informacoes-semana">
+        <span
+          class="status-semana"
+          :class="{
+            'status-semana-atual': semanaAtual === calcularSemanaAtual()
+          }"
+        >
+          {{
+            semanaAtual === calcularSemanaAtual()
+              ? '● Semana atual'
+              : 'Semana selecionada'
+          }}
+        </span>
+
+        <div class="numeracao-semana">
+          <span class="numero-principal">
+            {{ String(semanaAtual).padStart(2, '0') }}
+          </span>
+          <span class="separador-semana">/</span>
+          <span class="numero-total">08</span>
         </div>
 
+        <div class="periodo-semana">
+          {{ periodoDaSemana(semanaAtual) }}
+        </div>
+
+        <div class="linha-progresso-semanas">
+          <div
+            v-for="numero in 8"
+            :key="numero"
+            class="etapa-semana"
+            :class="{
+              'etapa-ativa': numero === semanaAtual,
+              'etapa-passada': numero < semanaAtual
+            }"
+            @click="mudarSemana(numero)"
+          >
+            {{ numero }}
+          </div>
+        </div>
+      </div>
+
+      <button
+        class="seta-semana"
+        @click="proximaSemana"
+        :disabled="semanaAtual === 8"
+      >
+        →
+      </button>
+    </div>
+
+  </div>
         <div class="quadro">
   <div
     v-for="dia in dias"
@@ -934,4 +1133,337 @@ function desfazer(id: number) {
   outline-offset: -2px;
 }
 
+.navegacao-semanas {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.informacoes-semana {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  width: 290px;
+  flex-shrink: 0;
+}
+
+.semana-linha {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.semana-texto {
+  font-size: 15px;
+  font-weight: 700;
+  color: #25334c;
+}
+
+.numero-semana {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.numero-semana.ativo {
+  background: #2563eb;
+  color: white;
+}
+
+.numero-semana.total {
+  background: #e9edf5;
+  color: #25334c;
+}
+
+.indicador-atual {
+  background: #eaf1ff;
+  color: #2563eb;
+  padding: 7px 12px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.periodo-semana {
+  font-size: 13px;
+  color: #8490a3;
+  font-weight: 600;
+}
+
+.linha-progresso-semanas {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+  isolation: isolate;
+  justify-content: center;
+}
+
+/* Linha que conecta as oito semanas */
+.linha-progresso-semanas::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 50%;
+  height: 3px;
+  background: #d5deed;
+  transform: translateY(-50%);
+  z-index: -1;
+}
+
+.etapa-semana {
+  width: 24px;
+  height: 24px;
+  border: 2px solid #d5deed;
+  border-radius: 50%;
+  background: white;
+  color: #8290a5;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.etapa-semana:hover {
+  border-color: #2563eb;
+}
+
+.etapa-semana.etapa-ativa {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+
+.etapa-semana.etapa-passada {
+  background: #dbeafe;
+  border-color: #93b4f5;
+  color: #2563eb;
+}
+
+.seta-semana {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #e3e9f3;
+  border-radius: 9px;
+  background: white;
+  color: #2563eb;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.seta-semana:hover:not(:disabled) {
+  background: #edf3ff;
+}
+
+.seta-semana:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.semana-linha {
+  min-height: 34px;
+}
+
+.indicador-atual {
+  min-width: 100px;
+  text-align: center;
+}
+/* Novo visual do seletor de semanas */
+
+.informacoes-semana {
+  width: 290px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-semana {
+  display: inline-block;
+  min-width: 130px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: #edf0f5;
+  color: #7b879a;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-semana-atual {
+  background: #eaf1ff;
+  color: #2563eb;
+}
+
+.numeracao-semana {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.numero-principal {
+  color: #2563eb;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.separador-semana {
+  color: #c4cedc;
+  font-size: 23px;
+}
+
+.numero-total {
+  color: #9aa7b9;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.periodo-semana {
+  font-size: 12px;
+  color: #8490a3;
+  font-weight: 600;
+}
+
+.linha-progresso-semanas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  position: relative;
+  isolation: isolate;
+}
+
+.linha-progresso-semanas::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 50%;
+  height: 3px;
+  background: #d5deed;
+  transform: translateY(-50%);
+  z-index: -1;
+}
+
+.etapa-semana {
+  position: relative;
+  z-index: 1;
+}
+
+.cartao-pad {
+  padding: 18px 22px;
+  margin-bottom: 20px;
+  background: #edf3ff;
+  border: 1px solid #dce7fc;
+  border-radius: 14px;
+}
+
+.pad-codigo {
+  display: block;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.pad-frase {
+  margin: 0;
+  color: #25334c;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.faixa-destaques {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 18px 0 24px;
+  align-items: stretch;
+}
+
+.faixa-destaques > * {
+  min-width: 0;
+}
+
+.faixa-destaques .progresso {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  justify-content: flex-start;
+  background: #edf3ff;
+  border: 1px solid #dce7fc;
+  border-radius: 14px;
+  padding: 16px 20px;
+}
+
+.faixa-destaques .cartao-pad {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+@media (max-width: 900px) {
+  .faixa-destaques {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Faixa com progresso, PAD e navegação */
+
+.faixa-destaques {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    340px;
+  gap: 14px;
+  align-items: stretch;
+  margin: 18px 0 24px;
+}
+
+.faixa-destaques > * {
+  min-width: 0;
+}
+
+.faixa-destaques .progresso {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.faixa-destaques .cartao-pad {
+  margin: 0;
+}
+
+.faixa-destaques .navegacao-semanas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.faixa-destaques .informacoes-semana {
+  width: 250px;
+  flex-shrink: 1;
+}
+
+@media (max-width: 1150px) {
+  .faixa-destaques {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
