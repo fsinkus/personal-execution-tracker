@@ -1,582 +1,198 @@
-
-
 <script setup lang="ts">
-
-import { computed, ref, watch, onMounted } from 'vue'
-
-
-
+import { computed, ref, onMounted } from 'vue'
 import NovaTemporada from './components/NovaTemporada.vue'
-
-
-
 import { supabase } from './lib/supabase'
 
-
+type Atividade = {
+  id: string
+  nome: string
+  dia: string
+  icone: string
+  concluida: boolean
+}
+type Semana = { id: string; numero: number; meta_pontos: number }
 
 const mostrarNovaTemporada = ref(false)
-
-async function sair() {
-
-  const { error } = await supabase.auth.signOut()
-
-
-
-  if (error) {
-
-    console.error('Erro ao sair:', error.message)
-
-    alert('Não foi possível encerrar a sessão.')
-
-  }
-
-}
-
-
-
-const diaEmDestaque = ref<string | null>(null)
-
-const atividadeArrastada = ref<number | null>(null)
-
-
-
-function iniciarArraste(id: number) {
-
-  atividadeArrastada.value = id
-
-}
-
-
-
-function soltarAtividade(diaDestino: string) {
-
-  if (atividadeArrastada.value === null) return
-
-
-
-  const atividade = atividades.value.find(
-
-    a => a.id === atividadeArrastada.value
-
-  )
-
-
-
-  if (atividade && !atividade.concluida) {
-
-    atividade.dia = diaDestino
-
-  }
-
-
-
-  atividadeArrastada.value = null
-
-}
-
-
-
 const menuRecolhido = ref(false)
-
 const semanaAtual = ref(1)
-
 const temporadaAtual = ref(1)
 const temporadaId = ref<string | null>(null)
 const nomeTemporada = ref('')
 const erroTemporada = ref('')
 const carregandoTemporada = ref(true)
+const carregandoAtividades = ref(false)
+const erroAtividades = ref('')
+const processandoAtividade = ref(false)
+const semanas = ref<Semana[]>([])
+const atividades = ref<Atividade[]>([])
+const mostrarFormulario = ref(false)
+const novaAtividade = ref({ nome: '', dia: 'Segunda', icone: '📌' })
+const diaEmDestaque = ref<string | null>(null)
+const atividadeArrastada = ref<string | null>(null)
+const inicioTemporada = ref(new Date(2026, 9, 12))
+const dias = [
+  { nome: 'Segunda', curto: 'Seg' }, { nome: 'Terça', curto: 'Ter' },
+  { nome: 'Quarta', curto: 'Qua' }, { nome: 'Quinta', curto: 'Qui' },
+  { nome: 'Sexta', curto: 'Sex' }, { nome: 'Sábado', curto: 'Sáb' },
+  { nome: 'Domingo', curto: 'Dom' }
+]
+const metaSemanal = computed(() => semanas.value.find(s => s.numero === semanaAtual.value)?.meta_pontos ?? 12)
+const pontos = computed(() => atividades.value.filter(a => a.concluida).length)
+const progresso = computed(() => Math.min((pontos.value / metaSemanal.value) * 100, 100))
+const pads = [
+  { codigo: 'PAD-003', frase: 'Resultado é retorno repetido ao procedimento.' },
+  { codigo: 'PAD-019', frase: 'Ativos intelectuais produzem patrimônio composto.' },
+  { codigo: 'PAD-020', frase: 'Mantenha o Rumo e a Chegada Será Inevitável.' }
+]
+const indiceSalvo = Number(localStorage.getItem('ultimo-pad-exibido') ?? '-1')
+const proximoIndice = Number.isInteger(indiceSalvo) ? (indiceSalvo + 1) % pads.length : 0
+const padAtual = ref(pads[proximoIndice]!)
+localStorage.setItem('ultimo-pad-exibido', String(proximoIndice))
 
-function dataLocal(data: string) {
-  return new Date(`${data}T12:00:00`)
+function dataLocal(data: string) { return new Date(`${data}T12:00:00`) }
+function calcularSemanaAtual() {
+  const hoje = new Date()
+  const inicio = inicioTemporada.value
+  const diferenca = Math.floor((Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()) - Date.UTC(inicio.getFullYear(), inicio.getMonth(), inicio.getDate())) / 86400000)
+  return Math.max(1, Math.min(Math.floor(diferenca / 7) + 1, 8))
 }
+function periodoDaSemana(semana: number) {
+  const inicio = new Date(inicioTemporada.value)
+  inicio.setDate(inicio.getDate() + (semana - 1) * 7)
+  const fim = new Date(inicio)
+  fim.setDate(fim.getDate() + 6)
+  const formatar = (data: Date) => data.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+  return `${formatar(inicio)} – ${formatar(fim)}`
+}
+function semanaSelecionada() { return semanas.value.find(s => s.numero === semanaAtual.value) }
+function mensagemErro(erro: unknown) { return erro instanceof Error ? erro.message : 'Erro inesperado.' }
 
 async function carregarTemporadaAtiva() {
   carregandoTemporada.value = true
   erroTemporada.value = ''
+  erroAtividades.value = ''
   const { data, error } = await supabase.from('temporadas')
-    .select('id, numero, nome, data_inicio')
-    .eq('status', 'ativa')
-    .maybeSingle()
-
+    .select('id, numero, nome, data_inicio').eq('status', 'ativa').maybeSingle()
   if (error) {
-    erroTemporada.value = 'Não foi possível consultar a temporada ativa.'
-    console.error(error)
+    erroTemporada.value = 'Não foi possível consultar a temporada ativa: ' + error.message
     carregandoTemporada.value = false
     return
   }
-
-  if (data) {
-    temporadaId.value = data.id
-    temporadaAtual.value = data.numero
-    nomeTemporada.value = data.nome
-    inicioTemporada.setTime(dataLocal(data.data_inicio).getTime())
-  } else {
+  if (!data) {
     temporadaId.value = null
     nomeTemporada.value = ''
+    semanas.value = []
+    atividades.value = []
+    carregandoTemporada.value = false
+    return
   }
-
+  temporadaId.value = data.id
+  temporadaAtual.value = data.numero
+  nomeTemporada.value = data.nome
+  inicioTemporada.value = dataLocal(data.data_inicio)
+  const { data: listaSemanas, error: erroSemanas } = await supabase.from('semanas')
+    .select('id, numero, meta_pontos').eq('temporada_id', data.id).order('numero')
+  if (erroSemanas || !listaSemanas || listaSemanas.length !== 8) {
+    erroTemporada.value = erroSemanas?.message ?? 'Esta temporada não possui oito semanas cadastradas.'
+    carregandoTemporada.value = false
+    return
+  }
+  semanas.value = listaSemanas
   semanaAtual.value = calcularSemanaAtual()
-  atividades.value = carregarAtividades(temporadaAtual.value, semanaAtual.value)
   carregandoTemporada.value = false
+  await carregarAtividades()
 }
 
-onMounted(() => { void carregarTemporadaAtiva() })
-
-
-
-// A primeira temporada começa em 12/10/2026
-
-const inicioTemporada = new Date(2026, 9, 12)
-
-
-
-// Calcula as datas de cada semana
-
-function periodoDaSemana(semana: number) {
-
-  const inicio = new Date(inicioTemporada)
-
-  inicio.setDate(inicio.getDate() + (semana - 1) * 7)
-
-
-
-  const fim = new Date(inicio)
-
-  fim.setDate(fim.getDate() + 6)
-
-
-
-  const formatar = (data: Date) =>
-
-    data.toLocaleDateString('pt-BR', {
-
-      day: '2-digit',
-
-      month: 'short'
-
-    })
-
-
-
-  return `${formatar(inicio)} – ${formatar(fim)}`
-
+async function carregarAtividades() {
+  const semana = semanaSelecionada()
+  if (!semana || !temporadaId.value) { atividades.value = []; return }
+  carregandoAtividades.value = true
+  erroAtividades.value = ''
+  const idConsultado = semana.id
+  const { data, error } = await supabase.from('atividades')
+    .select('id, nome, dia, icone, concluida').eq('semana_id', idConsultado).order('criada_em')
+  // Evita que uma resposta atrasada sobrescreva a semana que o usuário selecionou.
+  if (semanaSelecionada()?.id !== idConsultado) return
+  if (error) {
+    erroAtividades.value = 'Não foi possível carregar as atividades: ' + error.message
+  } else {
+    atividades.value = (data ?? []) as Atividade[]
+  }
+  carregandoAtividades.value = false
 }
 
-
-
-// Descobre qual semana corresponde à data de hoje
-
-function calcularSemanaAtual() {
-
-  const hoje = new Date()
-
-
-
-  const diferencaDias = Math.floor(
-
-    (
-
-      Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()) -
-
-      Date.UTC(inicioTemporada.getFullYear(), inicioTemporada.getMonth(), inicioTemporada.getDate())
-
-    ) / 86400000
-
-  )
-
-
-
-  const semana = Math.floor(diferencaDias / 7) + 1
-
-
-
-  return Math.max(1, Math.min(semana, 8))
-
+async function executarAlteracao(operacao: () => Promise<void>) {
+  if (processandoAtividade.value || carregandoAtividades.value || !semanaSelecionada()) return
+  processandoAtividade.value = true
+  erroAtividades.value = ''
+  try { await operacao() }
+  catch (erro) { erroAtividades.value = mensagemErro(erro); console.error(erro) }
+  finally { processandoAtividade.value = false }
 }
 
-
-
-// Seleciona a semana correta antes de carregar as atividades
-
-semanaAtual.value = calcularSemanaAtual()
-
-
-
-const dias = [
-
-  { nome: 'Segunda', curto: 'Seg' },
-
-  { nome: 'Terça', curto: 'Ter' },
-
-  { nome: 'Quarta', curto: 'Qua' },
-
-  { nome: 'Quinta', curto: 'Qui' },
-
-  { nome: 'Sexta', curto: 'Sex' },
-
-  { nome: 'Sábado', curto: 'Sáb' },
-
-  { nome: 'Domingo', curto: 'Dom' }
-
-]
-
-
-
-const atividades = ref([
-
-  { id: 1, nome: 'Academia', dia: 'Segunda', icone: '🏋️', concluida: false },
-
-  { id: 2, nome: 'Inglês', dia: 'Terça', icone: '📘', concluida: false },
-
-  { id: 3, nome: 'Impacta', dia: 'Quarta', icone: '🎓', concluida: false },
-
-  { id: 4, nome: 'DevOps', dia: 'Quinta', icone: '💻', concluida: false }
-
-])
-
-
-
-const mostrarFormulario = ref(false)
-
-
-
-const novaAtividade = ref({
-
-  nome: '',
-
-  dia: 'Segunda',
-
-  icone: '📌',
-
-})
-
-
-
-function adicionarAtividade() {
-
+async function adicionarAtividade() {
   const nome = novaAtividade.value.nome.trim()
-
-
-
-  if (!nome) return
-
-
-
-  atividades.value.push({
-
-    id: Date.now(),
-
-    nome,
-
-    dia: novaAtividade.value.dia,
-
-    icone: novaAtividade.value.icone,
-
-    concluida: false,
-
+  const semana = semanaSelecionada()
+  if (!nome || !semana || !temporadaId.value) return
+  await executarAlteracao(async () => {
+    const { data: usuario, error: erroUsuario } = await supabase.auth.getUser()
+    if (erroUsuario || !usuario.user) throw new Error('Sua sessão expirou. Entre novamente.')
+    const { data, error } = await supabase.from('atividades').insert({
+      usuario_id: usuario.user.id, semana_id: semana.id, nome,
+      dia: novaAtividade.value.dia, icone: novaAtividade.value.icone, concluida: false
+    }).select('id, nome, dia, icone, concluida').single()
+    if (error) throw error
+    atividades.value.push(data as Atividade)
+    novaAtividade.value.nome = ''
+    novaAtividade.value.icone = '📌'
+    mostrarFormulario.value = false
   })
-
-
-
- novaAtividade.value.nome = ''
-
-novaAtividade.value.icone = '📌'
-
-mostrarFormulario.value = false
-
 }
-
-
-
-
-
-function excluirAtividade(id: number) {
-
-  const confirmar = window.confirm(
-
-    'Deseja realmente excluir esta atividade?'
-
-  )
-
-
-
-  if (!confirmar) return
-
-
-
-  atividades.value = atividades.value.filter(
-
-    atividade => atividade.id !== id
-
-  )
-
+async function excluirAtividade(id: string) {
+  if (!window.confirm('Deseja realmente excluir esta atividade?')) return
+  await executarAlteracao(async () => {
+    const { error } = await supabase.from('atividades').delete().eq('id', id)
+    if (error) throw error
+    atividades.value = atividades.value.filter(a => a.id !== id)
+  })
 }
-
-// Identifica o armazenamento de cada semana e temporada
-
-function chaveDaSemana(temporada: number, semana: number) {
-
-  return temporadaId.value ? `atividades-cloud-pendente-${temporadaId.value}-s${semana}` : `atividades-t${temporada}-s${semana}`
-
+async function atualizarAtividade(id: string, alteracoes: Partial<Pick<Atividade, 'dia' | 'concluida'>>) {
+  await executarAlteracao(async () => {
+    const { data, error } = await supabase.from('atividades').update({
+      ...alteracoes,
+      ...(typeof alteracoes.concluida === 'boolean' ? { concluida_em: alteracoes.concluida ? new Date().toISOString() : null } : {})
+    }).eq('id', id).select('id, nome, dia, icone, concluida').single()
+    if (error) throw error
+    const indice = atividades.value.findIndex(a => a.id === id)
+    if (indice !== -1) atividades.value[indice] = data as Atividade
+  })
 }
-
-
-
-// Recupera as atividades salvas de uma semana
-
-function carregarAtividades(temporada: number, semana: number) {
-
-  const dadosSalvos = localStorage.getItem(
-
-    chaveDaSemana(temporada, semana)
-
-  )
-
-
-
-  if (!dadosSalvos) return []
-
-
-
-  try {
-
-    const dados = JSON.parse(dadosSalvos)
-
-    return Array.isArray(dados) ? dados : []
-
-  } catch (erro) {
-
-    console.error('Erro ao carregar atividades:', erro)
-
-    return []
-
+function concluir(id: string) { void atualizarAtividade(id, { concluida: true }) }
+function desfazer(id: string) { void atualizarAtividade(id, { concluida: false }) }
+function iniciarArraste(id: string) { atividadeArrastada.value = id }
+function soltarAtividade(diaDestino: string) {
+  const id = atividadeArrastada.value
+  atividadeArrastada.value = null
+  if (!id) return
+  const atividade = atividades.value.find(a => a.id === id)
+  if (atividade && !atividade.concluida && atividade.dia !== diaDestino) {
+    void atualizarAtividade(id, { dia: diaDestino })
   }
-
 }
-
-
-
-// Migra os dados antigos para a primeira semana
-
-const chaveAntiga = 'atividades-semanais'
-
-const chavePrimeiraSemana = chaveDaSemana(1, 1)
-
-
-
-if (
-
-  localStorage.getItem(chavePrimeiraSemana) === null &&
-
-  localStorage.getItem(chaveAntiga) !== null
-
-) {
-
-  localStorage.setItem(
-
-    chavePrimeiraSemana,
-
-    localStorage.getItem(chaveAntiga)!
-
-  )
-
-}
-
-
-
-// Carrega a semana inicial
-
-atividades.value = carregarAtividades(
-
-  temporadaAtual.value,
-
-  semanaAtual.value
-
-)
-
-
-
-// Salva automaticamente as alterações
-
-watch(
-
-  atividades,
-
-  (novasAtividades) => {
-
-    localStorage.setItem(
-
-      chaveDaSemana(temporadaAtual.value, semanaAtual.value),
-
-      JSON.stringify(novasAtividades)
-
-    )
-
-  },
-
-  { deep: true }
-
-)
-
-const metaSemanal = 12
-
-
-
-const pads = [
-
-  {
-
-    codigo: 'PAD-003',
-
-    frase: 'Resultado é retorno repetido ao procedimento.'
-
-  },
-
-  {
-
-    codigo: 'PAD-019',
-
-    frase: 'Ativos intelectuais produzem patrimônio composto.'
-
-  },
-
-  {
-
-    codigo: 'PAD-020',
-
-    frase: 'Mantenha o Rumo e a Chegada Será Inevitável.'
-
-  }
-
-]
-
-
-
-const indiceSalvo = Number(localStorage.getItem('ultimo-pad-exibido') ?? '-1')
-
-
-
-const proximoIndice = Number.isInteger(indiceSalvo)
-
-  ? (indiceSalvo + 1) % pads.length
-
-  : 0
-
-
-
-const padAtual = ref(pads[proximoIndice]!)
-
-
-
-localStorage.setItem('ultimo-pad-exibido', String(proximoIndice))
-
-
-
-function mudarSemana(novaSemana: number) {
-
-  if (novaSemana < 1 || novaSemana > 8) return
-
-
-
-  // Salva os dados da semana que estamos deixando
-
-  localStorage.setItem(
-
-    chaveDaSemana(temporadaAtual.value, semanaAtual.value),
-
-    JSON.stringify(atividades.value)
-
-  )
-
-
-
-  // Recupera os dados da semana de destino
-
-  const atividadesDestino = carregarAtividades(
-
-    temporadaAtual.value,
-
-    novaSemana
-
-  )
-
-
-
-  // Atualiza a semana antes de carregar suas atividades
-
+async function mudarSemana(novaSemana: number) {
+  if (novaSemana < 1 || novaSemana > 8 || processandoAtividade.value || carregandoAtividades.value || novaSemana === semanaAtual.value) return
   semanaAtual.value = novaSemana
-
-  atividades.value = atividadesDestino
-
+  atividades.value = []
+  await carregarAtividades()
 }
-
-
-
-function proximaSemana() {
-
-  mudarSemana(semanaAtual.value + 1)
-
+function proximaSemana() { void mudarSemana(semanaAtual.value + 1) }
+function semanaAnterior() { void mudarSemana(semanaAtual.value - 1) }
+async function sair() {
+  const { error } = await supabase.auth.signOut()
+  if (error) { console.error(error); alert('Não foi possível encerrar a sessão.') }
 }
-
-
-
-function semanaAnterior() {
-
-  mudarSemana(semanaAtual.value - 1)
-
-}
-
-
-
-const pontos = computed(() =>
-
-  atividades.value.filter(a => a.concluida).length
-
-)
-
-
-
-const progresso = computed(() =>
-
-  Math.min((pontos.value / metaSemanal) * 100, 100)
-
-)
-
-
-
-function concluir(id: number) {
-
-  const atividade = atividades.value.find(a => a.id === id)
-
-
-
-  if (atividade) {
-
-    atividade.concluida = true
-
-  }
-
-}
-
-
-
-function desfazer(id: number) {
-
-  const atividade = atividades.value.find(a => a.id === id)
-
-
-
-  if (atividade) {
-
-    atividade.concluida = false
-
-  }
-
-}
-
+onMounted(() => { void carregarTemporadaAtiva() })
 </script>
-
-
 
 <template>
 
@@ -588,11 +204,7 @@ function desfazer(id: number) {
 
   :class="{ 'sidebar-recolhida': menuRecolhido }"
 
-
-
 >
-
-
 
 <button
 
@@ -610,8 +222,6 @@ function desfazer(id: number) {
 
 </button>
 
-
-
       <div class="marca">
 
         <div class="marca-icone">✦</div>
@@ -626,8 +236,6 @@ function desfazer(id: number) {
 
       </div>
 
-
-
       <nav class="menu">
 
   <a class="menu-ativo">
@@ -638,8 +246,6 @@ function desfazer(id: number) {
 
   </a>
 
-
-
   <a>
 
     <span>◫</span>
@@ -647,8 +253,6 @@ function desfazer(id: number) {
     <span>Progresso</span>
 
   </a>
-
-
 
   <a>
 
@@ -658,8 +262,6 @@ function desfazer(id: number) {
 
   </a>
 
-
-
   <a>
 
     <span>⚙</span>
@@ -667,8 +269,6 @@ function desfazer(id: number) {
     <span>Configurações</span>
 
   </a>
-
-
 
   <a
 
@@ -690,10 +290,6 @@ function desfazer(id: number) {
 
 </nav>
 
-
-
-
-
       <div class="temporada">
 
   <small>TEMPORADA ATUAL</small>
@@ -706,15 +302,9 @@ function desfazer(id: number) {
 
     </aside>
 
-
-
-
-
     <main class="conteudo">
 
       <header class="cabecalho">
-
-
 
         <div>
 
@@ -730,23 +320,17 @@ function desfazer(id: number) {
 
         </div>
 
-        <button class="botao-nova-atividade" @click="mostrarFormulario = !mostrarFormulario">
+        <button class="botao-nova-atividade" @click="mostrarFormulario = !mostrarFormulario" :disabled="!temporadaId || carregandoAtividades || processandoAtividade">
 
   + Nova atividade
 
 </button>
-
-
-
-
 
 <button class="botao-sair" @click="sair">
 
   Sair
 
 </button>
-
-
 
 <div v-if="mostrarFormulario" class="formulario-atividade">
 
@@ -761,8 +345,6 @@ function desfazer(id: number) {
     @keyup.enter="adicionarAtividade"
 
   />
-
-
 
   <select v-model="novaAtividade.dia">
 
@@ -781,8 +363,6 @@ function desfazer(id: number) {
     </option>
 
   </select>
-
-
 
    <select v-model="novaAtividade.icone" aria-label="Ícone da atividade">
 
@@ -808,15 +388,11 @@ function desfazer(id: number) {
 
 </select>
 
-
-
-  <button @click="adicionarAtividade">
+  <button @click="adicionarAtividade" :disabled="carregandoAtividades || processandoAtividade">
 
     Adicionar
 
   </button>
-
-
 
   <button @click="mostrarFormulario = false">
 
@@ -826,21 +402,27 @@ function desfazer(id: number) {
 
 </div>
 
-
-
-
-
       </header>
 
-
-
       <p v-if="erroTemporada" style="color:#b91c1c">{{ erroTemporada }}</p>
+
         <p v-if="carregandoTemporada">Carregando temporada...</p>
-        <section v-if="!carregandoTemporada && !erroTemporada" class="secao">
+        <p v-if="!carregandoTemporada && !temporadaId && !erroTemporada" class="aviso-sync">Nenhuma temporada ativa. Use “Nova temporada” no menu para iniciar.</p>
+        <p v-if="erroAtividades" class="aviso-sync">{{ erroAtividades }} <button type="button" @click="carregarAtividades">Tentar novamente</button></p>
+        <p v-if="carregandoAtividades" class="aviso-sync">Carregando atividades da semana...</p>
+        <p v-if="processandoAtividade" class="aviso-sync">Salvando alteração na nuvem...</p>
+
+<NovaTemporada
+
+  v-if="mostrarNovaTemporada"
+
+  @temporada-criada="mostrarNovaTemporada = false; carregarTemporadaAtiva()"
+
+/>
+
+        <section v-if="!carregandoTemporada && !erroTemporada && temporadaId" class="secao">
 
   <div class="faixa-destaques">
-
-
 
     <!-- PROGRESSO SEMANAL -->
 
@@ -864,8 +446,6 @@ function desfazer(id: number) {
 
       </div>
 
-
-
       <div class="progresso-texto">
 
         <strong>Seu progresso semanal</strong>
@@ -875,8 +455,6 @@ function desfazer(id: number) {
       </div>
 
     </div>
-
-
 
     <!-- PAD ROTATIVO -->
 
@@ -888,8 +466,6 @@ function desfazer(id: number) {
 
     </div>
 
-
-
     <!-- SELETOR DE SEMANAS -->
 
     <div class="navegacao-semanas">
@@ -900,15 +476,13 @@ function desfazer(id: number) {
 
         @click="semanaAnterior"
 
-        :disabled="semanaAtual === 1"
+        :disabled="semanaAtual === 1 || carregandoAtividades || processandoAtividade"
 
       >
 
         ←
 
       </button>
-
-
 
       <div class="informacoes-semana">
 
@@ -936,8 +510,6 @@ function desfazer(id: number) {
 
         </span>
 
-
-
         <div class="numeracao-semana">
 
           <span class="numero-principal">
@@ -952,15 +524,11 @@ function desfazer(id: number) {
 
         </div>
 
-
-
         <div class="periodo-semana">
 
           {{ periodoDaSemana(semanaAtual) }}
 
         </div>
-
-
 
         <div class="linha-progresso-semanas">
 
@@ -992,15 +560,13 @@ function desfazer(id: number) {
 
       </div>
 
-
-
       <button
 
         class="seta-semana"
 
         @click="proximaSemana"
 
-        :disabled="semanaAtual === 8"
+        :disabled="semanaAtual === 8 || carregandoAtividades || processandoAtividade"
 
       >
 
@@ -1009,14 +575,6 @@ function desfazer(id: number) {
       </button>
 
     </div>
-
-<NovaTemporada
-
-  v-if="mostrarNovaTemporada"
-
-  @temporada-criada="mostrarNovaTemporada = false; carregarTemporadaAtiva()"
-
-/>
 
 
 
@@ -1040,10 +598,7 @@ function desfazer(id: number) {
 
     </div>
 
-
-
     <div
-
 
   class="coluna-corpo"
 
@@ -1085,19 +640,13 @@ function desfazer(id: number) {
 
         </span>
 
-
-
         <span class="cartao-nome">
 
           {{ atividade.nome }}
 
         </span>
 
-
-
         <span class="cartao-check"></span>
-
-
 
         <button
 
@@ -1127,9 +676,7 @@ function desfazer(id: number) {
 
       </section>
 
-
-
-      <section class="done">
+      <section v-if="temporadaId && !carregandoTemporada && !erroTemporada" class="done">
 
         <div class="done-cabecalho">
 
@@ -1150,8 +697,6 @@ function desfazer(id: number) {
           </span>
 
         </div>
-
-
 
         <div class="done-lista">
 
@@ -1179,8 +724,6 @@ function desfazer(id: number) {
 
           </button>
 
-
-
           <p v-if="pontos === 0" class="done-vazio">
 
             Suas atividades concluídas aparecerão aqui.
@@ -1197,8 +740,6 @@ function desfazer(id: number) {
 
 </template>
 
-
-
 <style scoped>
 
 * {
@@ -1206,8 +747,6 @@ function desfazer(id: number) {
   box-sizing: border-box;
 
 }
-
-
 
 .layout {
 
@@ -1224,8 +763,6 @@ function desfazer(id: number) {
   font-family: Inter, Arial, sans-serif;
 
 }
-
-
 
 .sidebar {
 
@@ -1245,8 +782,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .marca {
 
   display: flex;
@@ -1258,8 +793,6 @@ function desfazer(id: number) {
   padding: 0 10px;
 
 }
-
-
 
 .marca-icone {
 
@@ -1281,8 +814,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .marca strong,
 
 .marca small {
@@ -1291,15 +822,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .marca strong {
 
   font-size: 17px;
 
 }
-
-
 
 .marca small {
 
@@ -1310,8 +837,6 @@ function desfazer(id: number) {
   margin-top: 3px;
 
 }
-
-
 
 .menu {
 
@@ -1324,8 +849,6 @@ function desfazer(id: number) {
   margin-top: 48px;
 
 }
-
-
 
 .menu a {
 
@@ -1347,8 +870,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .menu-ativo {
 
   background: #eaf0ff;
@@ -1356,8 +877,6 @@ function desfazer(id: number) {
   color: #245df0 !important;
 
 }
-
-
 
 .temporada {
 
@@ -1377,8 +896,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .temporada small {
 
   color: #6780b0;
@@ -1389,15 +906,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .temporada strong {
 
   font-size: 14px;
 
 }
-
-
 
 .temporada span {
 
@@ -1406,8 +919,6 @@ function desfazer(id: number) {
   color: #70809b;
 
 }
-
-
 
 .conteudo {
 
@@ -1422,8 +933,6 @@ function desfazer(id: number) {
   overflow-y: auto;
 
 }
-
-
 
 .cabecalho {
 
@@ -1465,8 +974,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .cabecalho p {
 
   margin: 0;
@@ -1476,8 +983,6 @@ function desfazer(id: number) {
   font-size: 14px;
 
 }
-
-
 
 .progresso {
 
@@ -1496,8 +1001,6 @@ function desfazer(id: number) {
   padding: 12px 22px 12px 12px;
 
 }
-
-
 
 .anel {
 
@@ -1521,8 +1024,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .anel-centro {
 
   width: 60px;
@@ -1543,15 +1044,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .anel-centro strong {
 
   font-size: 19px;
 
 }
-
-
 
 .anel-centro small {
 
@@ -1560,8 +1057,6 @@ function desfazer(id: number) {
   color: #8490a3;
 
 }
-
-
 
 .progresso-texto {
 
@@ -1573,15 +1068,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .progresso-texto strong {
 
   font-size: 13px;
 
 }
-
-
 
 .progresso-texto span {
 
@@ -1590,8 +1081,6 @@ function desfazer(id: number) {
   color: #8995a7;
 
 }
-
-
 
 .secao-titulo {
 
@@ -1605,8 +1094,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .secao-titulo h2,
 
 .done h2 {
@@ -1617,8 +1104,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .secao-titulo > span {
 
   color: #8490a3;
@@ -1626,10 +1111,6 @@ function desfazer(id: number) {
   font-size: 13px;
 
 }
-
-
-
-
 
 .quadro {
 
@@ -1645,10 +1126,6 @@ function desfazer(id: number) {
 
 }
 
-
-
-
-
 .coluna {
 
   min-height: 240px;
@@ -1663,8 +1140,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .coluna-cabecalho {
 
   background: white;
@@ -1673,23 +1148,17 @@ function desfazer(id: number) {
 
   border-bottom: 1px solid #e8edf5;
 
-
-
   display: flex;
 
   align-items: center;
 
   justify-content: center;
 
-
-
   position: relative;
 
   text-align: center;
 
 }
-
-
 
 .coluna-cabecalho strong {
 
@@ -1699,11 +1168,7 @@ function desfazer(id: number) {
 
 }
 
-
-
 /* Linha azul animada */
-
-
 
 .coluna-cabecalho::after {
 
@@ -1715,25 +1180,17 @@ function desfazer(id: number) {
 
   left: 50%;
 
-
-
   width: 36px;
 
   height: 3px;
-
-
 
   background: #4263eb;
 
   border-radius: 3px 3px 0 0;
 
-
-
   transform: translateX(-50%) scaleX(0);
 
   opacity: 0;
-
-
 
   transition:
 
@@ -1743,8 +1200,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .coluna:hover .coluna-cabecalho::after {
 
   transform: translateX(-50%) scaleX(1);
@@ -1752,8 +1207,6 @@ function desfazer(id: number) {
   opacity: 1;
 
 }
-
-
 
 .coluna-corpo {
 
@@ -1767,8 +1220,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .cartao {
 
   width: 100%;
@@ -1781,27 +1232,19 @@ function desfazer(id: number) {
 
   padding: 11px 9px;
 
-
-
   background: #ffffff;
 
   border: 1px solid #e3e9f4;
 
   border-radius: 10px;
 
-
-
   box-shadow: 0 2px 4px rgba(35, 60, 100, 0.025);
-
-
 
   text-align: left;
 
   cursor: pointer;
 
   font-family: 'Manrope', Arial, sans-serif;
-
-
 
   transition:
 
@@ -1814,8 +1257,6 @@ function desfazer(id: number) {
     background 0.18s ease;
 
 }
-
-
 
 .cartao:hover {
 
@@ -1836,8 +1277,6 @@ function desfazer(id: number) {
   flex-shrink: 0;
 
 }
-
-
 
 .cartao-nome {
 
@@ -1865,8 +1304,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .cartao-check {
 
   width: 15px;
@@ -1880,8 +1317,6 @@ function desfazer(id: number) {
   flex-shrink: 0;
 
 }
-
-
 
 .done {
 
@@ -1897,8 +1332,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .done-cabecalho {
 
   display: flex;
@@ -1913,8 +1346,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .done-titulo {
 
   display: flex;
@@ -1924,8 +1355,6 @@ function desfazer(id: number) {
   gap: 10px;
 
 }
-
-
 
 .done-icone {
 
@@ -1945,8 +1374,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .done-contador {
 
   background: #d9f8ed;
@@ -1963,8 +1390,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .done-subtitulo {
 
   color: #94a0b0;
@@ -1972,8 +1397,6 @@ function desfazer(id: number) {
   font-size: 12px;
 
 }
-
-
 
 .done-lista {
 
@@ -1984,8 +1407,6 @@ function desfazer(id: number) {
   gap: 12px;
 
 }
-
-
 
 .done-cartao {
 
@@ -2017,8 +1438,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .done-remover {
 
   margin-left: auto;
@@ -2026,8 +1445,6 @@ function desfazer(id: number) {
   color: #8392a8;
 
 }
-
-
 
 .done-vazio {
 
@@ -2037,8 +1454,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 @media (max-width: 900px) {
 
   .sidebar {
@@ -2047,15 +1462,11 @@ function desfazer(id: number) {
 
   }
 
-
-
   .conteudo {
 
     padding: 22px;
 
   }
-
-
 
   .cabecalho {
 
@@ -2065,8 +1476,6 @@ function desfazer(id: number) {
 
   }
 
-
-
   .progresso {
 
     width: 100%;
@@ -2074,10 +1483,6 @@ function desfazer(id: number) {
   }
 
 }
-
-
-
-
 
 /* Transição suave ao recolher e expandir */
 
@@ -2089,8 +1494,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .sidebar-recolhida {
 
   width: 76px;
@@ -2098,8 +1501,6 @@ function desfazer(id: number) {
   min-width: 76px;
 
 }
-
-
 
 /* Botão de recolher */
 
@@ -2131,15 +1532,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .botao-menu:hover {
 
   background: #edf3ff;
 
 }
-
-
 
 /* Ajustes quando recolhida */
 
@@ -2151,23 +1548,17 @@ function desfazer(id: number) {
 
 }
 
-
-
 .sidebar-recolhida .marca > div:last-child {
 
   display: none;
 
 }
 
-
-
 .sidebar-recolhida .menu {
 
   align-items: center;
 
 }
-
-
 
 .sidebar-recolhida .menu a {
 
@@ -2181,15 +1572,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .sidebar-recolhida .menu a span {
 
   display: none;
 
 }
-
-
 
 .sidebar-recolhida .temporada {
 
@@ -2217,15 +1604,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .botao-nova-atividade:hover {
 
   background: #1d4ed8;
 
 }
-
-
 
 .formulario-atividade {
 
@@ -2247,8 +1630,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .formulario-atividade input,
 
 .formulario-atividade select {
@@ -2264,8 +1645,6 @@ function desfazer(id: number) {
   color: #25334c;
 
 }
-
-
 
 .formulario-atividade button {
 
@@ -2285,8 +1664,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .formulario-atividade button:first-of-type {
 
   background: #21bf91;
@@ -2295,15 +1672,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .cartao {
 
   position: relative;
 
 }
-
-
 
 .botao-excluir {
 
@@ -2337,8 +1710,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .cartao:hover .botao-excluir,
 
 .botao-excluir:focus-visible {
@@ -2346,8 +1717,6 @@ function desfazer(id: number) {
   opacity: 1;
 
 }
-
-
 
 .botao-excluir:hover {
 
@@ -2365,23 +1734,17 @@ function desfazer(id: number) {
 
 }
 
-
-
 .cartao:active {
 
   cursor: grabbing;
 
 }
 
-
-
 .coluna-corpo {
 
   min-height: 160px;
 
 }
-
-
 
 .coluna-corpo {
 
@@ -2390,8 +1753,6 @@ function desfazer(id: number) {
   border-radius: 12px;
 
 }
-
-
 
 .coluna-corpo.coluna-destaque {
 
@@ -2403,8 +1764,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .navegacao-semanas {
 
   display: flex;
@@ -2414,8 +1773,6 @@ function desfazer(id: number) {
   gap: 20px;
 
 }
-
-
 
 .informacoes-semana {
 
@@ -2433,8 +1790,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .semana-linha {
 
   display: flex;
@@ -2445,8 +1800,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .semana-texto {
 
   font-size: 15px;
@@ -2456,8 +1809,6 @@ function desfazer(id: number) {
   color: #25334c;
 
 }
-
-
 
 .numero-semana {
 
@@ -2477,8 +1828,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .numero-semana.ativo {
 
   background: #2563eb;
@@ -2487,8 +1836,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .numero-semana.total {
 
   background: #e9edf5;
@@ -2496,8 +1843,6 @@ function desfazer(id: number) {
   color: #25334c;
 
 }
-
-
 
 .indicador-atual {
 
@@ -2517,8 +1862,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .periodo-semana {
 
   font-size: 13px;
@@ -2528,8 +1871,6 @@ function desfazer(id: number) {
   font-weight: 600;
 
 }
-
-
 
 .linha-progresso-semanas {
 
@@ -2546,8 +1887,6 @@ function desfazer(id: number) {
   justify-content: center;
 
 }
-
-
 
 /* Linha que conecta as oito semanas */
 
@@ -2572,8 +1911,6 @@ function desfazer(id: number) {
   z-index: -1;
 
 }
-
-
 
 .etapa-semana {
 
@@ -2601,15 +1938,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .etapa-semana:hover {
 
   border-color: #2563eb;
 
 }
-
-
 
 .etapa-semana.etapa-ativa {
 
@@ -2621,8 +1954,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .etapa-semana.etapa-passada {
 
   background: #dbeafe;
@@ -2632,8 +1963,6 @@ function desfazer(id: number) {
   color: #2563eb;
 
 }
-
-
 
 .seta-semana {
 
@@ -2655,15 +1984,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .seta-semana:hover:not(:disabled) {
 
   background: #edf3ff;
 
 }
-
-
 
 .seta-semana:disabled {
 
@@ -2679,8 +2004,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .indicador-atual {
 
   min-width: 100px;
@@ -2690,8 +2013,6 @@ function desfazer(id: number) {
 }
 
 /* Novo visual do seletor de semanas */
-
-
 
 .informacoes-semana {
 
@@ -2708,8 +2029,6 @@ function desfazer(id: number) {
   gap: 8px;
 
 }
-
-
 
 .status-semana {
 
@@ -2735,8 +2054,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .status-semana-atual {
 
   background: #eaf1ff;
@@ -2744,8 +2061,6 @@ function desfazer(id: number) {
   color: #2563eb;
 
 }
-
-
 
 .numeracao-semana {
 
@@ -2759,8 +2074,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .numero-principal {
 
   color: #2563eb;
@@ -2773,8 +2086,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .separador-semana {
 
   color: #c4cedc;
@@ -2782,8 +2093,6 @@ function desfazer(id: number) {
   font-size: 23px;
 
 }
-
-
 
 .numero-total {
 
@@ -2797,8 +2106,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .periodo-semana {
 
   font-size: 12px;
@@ -2808,8 +2115,6 @@ function desfazer(id: number) {
   font-weight: 600;
 
 }
-
-
 
 .linha-progresso-semanas {
 
@@ -2826,8 +2131,6 @@ function desfazer(id: number) {
   isolation: isolate;
 
 }
-
-
 
 .linha-progresso-semanas::before {
 
@@ -2851,8 +2154,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .etapa-semana {
 
   position: relative;
@@ -2860,8 +2161,6 @@ function desfazer(id: number) {
   z-index: 1;
 
 }
-
-
 
 .cartao-pad {
 
@@ -2877,8 +2176,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .pad-codigo {
 
   display: block;
@@ -2892,8 +2189,6 @@ function desfazer(id: number) {
   margin-bottom: 6px;
 
 }
-
-
 
 .pad-frase {
 
@@ -2909,8 +2204,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .faixa-destaques {
 
   display: grid;
@@ -2925,15 +2218,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .faixa-destaques > * {
 
   min-width: 0;
 
 }
-
-
 
 .faixa-destaques .progresso {
 
@@ -2955,8 +2244,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .faixa-destaques .cartao-pad {
 
   margin: 0;
@@ -2969,8 +2256,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 @media (max-width: 900px) {
 
   .faixa-destaques {
@@ -2981,11 +2266,7 @@ function desfazer(id: number) {
 
 }
 
-
-
 /* Faixa com progresso, PAD e navegação */
-
-
 
 .faixa-destaques {
 
@@ -3007,15 +2288,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .faixa-destaques > * {
 
   min-width: 0;
 
 }
-
-
 
 .faixa-destaques .progresso {
 
@@ -3027,15 +2304,11 @@ function desfazer(id: number) {
 
 }
 
-
-
 .faixa-destaques .cartao-pad {
 
   margin: 0;
 
 }
-
-
 
 .faixa-destaques .navegacao-semanas {
 
@@ -3049,8 +2322,6 @@ function desfazer(id: number) {
 
 }
 
-
-
 .faixa-destaques .informacoes-semana {
 
   width: 250px;
@@ -3058,8 +2329,6 @@ function desfazer(id: number) {
   flex-shrink: 1;
 
 }
-
-
 
 @media (max-width: 1150px) {
 
@@ -3070,8 +2339,6 @@ function desfazer(id: number) {
   }
 
 }
-
-
 
 .botao-sair {
 
@@ -3093,12 +2360,12 @@ function desfazer(id: number) {
 
 }
 
-
-
 .botao-sair:hover {
 
   background: #f1f5f9;
 
 }
 
+.aviso-sync { padding: 12px 16px; margin: 12px 0; background: #fff7ed; border: 1px solid #fed7aa; color: #92400e; border-radius: 10px; font-size: 13px; }
+.aviso-sync button { margin-left: 8px; cursor: pointer; }
 </style>
