@@ -1,197 +1,540 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+
 import NovaTemporada from './components/NovaTemporada.vue'
+
+import EncerrarTemporada from './components/EncerrarTemporada.vue'
+import Celebracao from './components/Celebracao.vue'
+
 import { supabase } from './lib/supabase'
 
 type Atividade = {
-  id: string
-  nome: string
-  dia: string
-  icone: string
-  concluida: boolean
-}
-type Semana = { id: string; numero: number; meta_pontos: number }
 
-const mostrarNovaTemporada = ref(false)
+  id: string
+
+  nome: string
+
+  dia: string
+
+  icone: string
+
+  concluida: boolean
+
+}
+
+type Semana = {
+  id: string
+  numero: number
+  meta_pontos: number
+  status: 'aberta' | 'encerrada'
+  revisao_resultados: string | null
+  revisao_dificuldades: string | null
+  revisao_aprendizados: string | null
+  revisao_comprometimento: number | null
+}
+
+const mostrarGerenciamento = ref(false)
+const mostrarRevisao = ref(false)
+const celebrandoSemana = ref(false)
+const encerrandoSemana = ref(false)
+const erroEncerramento = ref('')
+const revisaoResultados = ref('')
+const revisaoDificuldades = ref('')
+const revisaoAprendizados = ref('')
+const revisaoComprometimento = ref<number | null>(null)
+
+const mostrarCheckConcluido = ref(false)
+
+let timerCheck: ReturnType<typeof setTimeout> | undefined
+
+// Som curto e suave de confirmação, gerado no navegador sem arquivo de áudio.
+
+function tocarSomConclusao() {
+
+  try {
+
+    const AudioContextClass = window.AudioContext
+
+    if (!AudioContextClass) return
+
+    const contexto = new AudioContextClass()
+
+    const inicio = contexto.currentTime
+
+    const notas = [523.25, 659.25, 783.99]
+
+    notas.forEach((frequencia, indice) => {
+
+      const oscilador = contexto.createOscillator()
+
+      const volume = contexto.createGain()
+
+      const comeco = inicio + indice * 0.085
+
+      oscilador.type = 'sine'
+
+      oscilador.frequency.setValueAtTime(frequencia, comeco)
+
+      volume.gain.setValueAtTime(0.0001, comeco)
+
+      volume.gain.exponentialRampToValueAtTime(0.055, comeco + 0.018)
+
+      volume.gain.exponentialRampToValueAtTime(0.0001, comeco + 0.25)
+
+      oscilador.connect(volume)
+
+      volume.connect(contexto.destination)
+
+      oscilador.start(comeco)
+
+      oscilador.stop(comeco + 0.26)
+
+    })
+
+    setTimeout(() => { void contexto.close() }, 750)
+
+  } catch (erro) {
+
+    console.debug('Áudio de conclusão indisponível:', erro)
+
+  }
+
+}
+
+function celebrarAtividade() {
+
+  if (timerCheck) clearTimeout(timerCheck)
+
+  mostrarCheckConcluido.value = false
+
+  // Reinicia a animação mesmo quando duas atividades são concluídas rapidamente.
+
+  requestAnimationFrame(() => {
+
+    mostrarCheckConcluido.value = true
+
+    timerCheck = setTimeout(() => { mostrarCheckConcluido.value = false }, 1100)
+
+  })
+
+}
+
+onUnmounted(() => { if (timerCheck) clearTimeout(timerCheck) })
+
 const menuRecolhido = ref(false)
+
 const semanaAtual = ref(1)
+
 const temporadaAtual = ref(1)
+
 const temporadaId = ref<string | null>(null)
+
 const nomeTemporada = ref('')
+const objetivoPrincipal = ref('')
+const marcosTemporada = ref<string[]>([])
+
 const erroTemporada = ref('')
+
 const carregandoTemporada = ref(true)
+
 const carregandoAtividades = ref(false)
+
 const erroAtividades = ref('')
+
 const processandoAtividade = ref(false)
+
 const semanas = ref<Semana[]>([])
+
 const atividades = ref<Atividade[]>([])
+
 const mostrarFormulario = ref(false)
+
 const novaAtividade = ref({ nome: '', dia: 'Segunda', icone: '📌' })
+
 const diaEmDestaque = ref<string | null>(null)
+
 const atividadeArrastada = ref<string | null>(null)
+
 const inicioTemporada = ref(new Date(2026, 9, 12))
+
 const dias = [
+
   { nome: 'Segunda', curto: 'Seg' }, { nome: 'Terça', curto: 'Ter' },
+
   { nome: 'Quarta', curto: 'Qua' }, { nome: 'Quinta', curto: 'Qui' },
+
   { nome: 'Sexta', curto: 'Sex' }, { nome: 'Sábado', curto: 'Sáb' },
+
   { nome: 'Domingo', curto: 'Dom' }
+
 ]
+
+const semanaEncerrada = computed(() => semanaSelecionada()?.status === 'encerrada')
+const totalAtividades = computed(() => atividades.value.length)
+const percentualRealizado = computed(() => totalAtividades.value ? Math.round(pontos.value / totalAtividades.value * 100) : 0)
 const metaSemanal = computed(() => semanas.value.find(s => s.numero === semanaAtual.value)?.meta_pontos ?? 12)
+
 const pontos = computed(() => atividades.value.filter(a => a.concluida).length)
+
 const progresso = computed(() => Math.min((pontos.value / metaSemanal.value) * 100, 100))
+
 const pads = [
+
   { codigo: 'PAD-003', frase: 'Resultado é retorno repetido ao procedimento.' },
+
   { codigo: 'PAD-019', frase: 'Ativos intelectuais produzem patrimônio composto.' },
+
   { codigo: 'PAD-020', frase: 'Mantenha o Rumo e a Chegada Será Inevitável.' }
+
 ]
+
 const indiceSalvo = Number(localStorage.getItem('ultimo-pad-exibido') ?? '-1')
+
 const proximoIndice = Number.isInteger(indiceSalvo) ? (indiceSalvo + 1) % pads.length : 0
+
 const padAtual = ref(pads[proximoIndice]!)
+
 localStorage.setItem('ultimo-pad-exibido', String(proximoIndice))
 
 function dataLocal(data: string) { return new Date(`${data}T12:00:00`) }
+
 function calcularSemanaAtual() {
+
   const hoje = new Date()
+
   const inicio = inicioTemporada.value
+
   const diferenca = Math.floor((Date.UTC(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()) - Date.UTC(inicio.getFullYear(), inicio.getMonth(), inicio.getDate())) / 86400000)
+
   return Math.max(1, Math.min(Math.floor(diferenca / 7) + 1, 8))
+
 }
+
 function periodoDaSemana(semana: number) {
+
   const inicio = new Date(inicioTemporada.value)
+
   inicio.setDate(inicio.getDate() + (semana - 1) * 7)
+
   const fim = new Date(inicio)
+
   fim.setDate(fim.getDate() + 6)
+
   const formatar = (data: Date) => data.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+
   return `${formatar(inicio)} – ${formatar(fim)}`
+
 }
+
 function semanaSelecionada() { return semanas.value.find(s => s.numero === semanaAtual.value) }
+
 function mensagemErro(erro: unknown) { return erro instanceof Error ? erro.message : 'Erro inesperado.' }
 
 async function carregarTemporadaAtiva() {
+
   carregandoTemporada.value = true
+
   erroTemporada.value = ''
+
   erroAtividades.value = ''
+
   const { data, error } = await supabase.from('temporadas')
-    .select('id, numero, nome, data_inicio').eq('status', 'ativa').maybeSingle()
+
+    .select('id, numero, nome, data_inicio, objetivos, objetivo_principal, marcos_temporada').eq('status', 'ativa').maybeSingle()
+
   if (error) {
+
     erroTemporada.value = 'Não foi possível consultar a temporada ativa: ' + error.message
+
     carregandoTemporada.value = false
+
     return
+
   }
+
   if (!data) {
+
     temporadaId.value = null
+
     nomeTemporada.value = ''
+    objetivoPrincipal.value = ''
+    marcosTemporada.value = []
+
     semanas.value = []
+
     atividades.value = []
+
     carregandoTemporada.value = false
+
     return
+
   }
+
   temporadaId.value = data.id
+
   temporadaAtual.value = data.numero
+
   nomeTemporada.value = data.nome
+  objetivoPrincipal.value = data.objetivo_principal?.trim() || data.objetivos?.trim() || ''
+  marcosTemporada.value = Array.isArray(data.marcos_temporada)
+    ? data.marcos_temporada.filter((marco: unknown): marco is string => typeof marco === 'string' && marco.trim().length > 0)
+    : []
+
   inicioTemporada.value = dataLocal(data.data_inicio)
+
   const { data: listaSemanas, error: erroSemanas } = await supabase.from('semanas')
-    .select('id, numero, meta_pontos').eq('temporada_id', data.id).order('numero')
+
+    .select('id, numero, meta_pontos, status, revisao_resultados, revisao_dificuldades, revisao_aprendizados, revisao_comprometimento').eq('temporada_id', data.id).order('numero')
+
   if (erroSemanas || !listaSemanas || listaSemanas.length !== 8) {
+
     erroTemporada.value = erroSemanas?.message ?? 'Esta temporada não possui oito semanas cadastradas.'
+
     carregandoTemporada.value = false
+
     return
+
   }
+
   semanas.value = listaSemanas
+
   semanaAtual.value = calcularSemanaAtual()
+
   carregandoTemporada.value = false
+
   await carregarAtividades()
+
 }
 
 async function carregarAtividades() {
+
   const semana = semanaSelecionada()
+
   if (!semana || !temporadaId.value) { atividades.value = []; return }
+
   carregandoAtividades.value = true
+
   erroAtividades.value = ''
+
   const idConsultado = semana.id
+
   const { data, error } = await supabase.from('atividades')
+
     .select('id, nome, dia, icone, concluida').eq('semana_id', idConsultado).order('criada_em')
+
   // Evita que uma resposta atrasada sobrescreva a semana que o usuário selecionou.
+
   if (semanaSelecionada()?.id !== idConsultado) return
+
   if (error) {
+
     erroAtividades.value = 'Não foi possível carregar as atividades: ' + error.message
+
   } else {
+
     atividades.value = (data ?? []) as Atividade[]
+
   }
+
   carregandoAtividades.value = false
+
 }
 
 async function executarAlteracao(operacao: () => Promise<void>) {
-  if (processandoAtividade.value || carregandoAtividades.value || !semanaSelecionada()) return
+
+  if (semanaEncerrada.value) {
+    erroAtividades.value = 'Esta semana já foi encerrada e está disponível apenas para consulta.'
+    return
+  }
+  if (processandoAtividade.value || carregandoAtividades.value || encerrandoSemana.value || !semanaSelecionada()) return
+
   processandoAtividade.value = true
+
   erroAtividades.value = ''
+
   try { await operacao() }
+
   catch (erro) { erroAtividades.value = mensagemErro(erro); console.error(erro) }
+
   finally { processandoAtividade.value = false }
+
 }
 
 async function adicionarAtividade() {
+
   const nome = novaAtividade.value.nome.trim()
+
   const semana = semanaSelecionada()
+
   if (!nome || !semana || !temporadaId.value) return
+
   await executarAlteracao(async () => {
+
     const { data: usuario, error: erroUsuario } = await supabase.auth.getUser()
+
     if (erroUsuario || !usuario.user) throw new Error('Sua sessão expirou. Entre novamente.')
+
     const { data, error } = await supabase.from('atividades').insert({
+
       usuario_id: usuario.user.id, semana_id: semana.id, nome,
+
       dia: novaAtividade.value.dia, icone: novaAtividade.value.icone, concluida: false
+
     }).select('id, nome, dia, icone, concluida').single()
+
     if (error) throw error
+
     atividades.value.push(data as Atividade)
+
     novaAtividade.value.nome = ''
+
     novaAtividade.value.icone = '📌'
+
     mostrarFormulario.value = false
+
   })
+
 }
+
 async function excluirAtividade(id: string) {
+
   if (!window.confirm('Deseja realmente excluir esta atividade?')) return
+
   await executarAlteracao(async () => {
+
     const { error } = await supabase.from('atividades').delete().eq('id', id)
+
     if (error) throw error
+
     atividades.value = atividades.value.filter(a => a.id !== id)
+
   })
+
 }
+
 async function atualizarAtividade(id: string, alteracoes: Partial<Pick<Atividade, 'dia' | 'concluida'>>) {
+
   await executarAlteracao(async () => {
+
     const { data, error } = await supabase.from('atividades').update({
+
       ...alteracoes,
+
       ...(typeof alteracoes.concluida === 'boolean' ? { concluida_em: alteracoes.concluida ? new Date().toISOString() : null } : {})
+
     }).eq('id', id).select('id, nome, dia, icone, concluida').single()
+
     if (error) throw error
+
     const indice = atividades.value.findIndex(a => a.id === id)
+
     if (indice !== -1) atividades.value[indice] = data as Atividade
+
+    if (alteracoes.concluida === true && data.concluida === true) celebrarAtividade()
+
   })
+
 }
-function concluir(id: string) { void atualizarAtividade(id, { concluida: true }) }
-function desfazer(id: string) { void atualizarAtividade(id, { concluida: false }) }
-function iniciarArraste(id: string) { atividadeArrastada.value = id }
-function soltarAtividade(diaDestino: string) {
-  const id = atividadeArrastada.value
-  atividadeArrastada.value = null
-  if (!id) return
+
+function concluir(id: string) {
+
   const atividade = atividades.value.find(a => a.id === id)
+
+  if (atividade && !atividade.concluida && !semanaEncerrada.value && !processandoAtividade.value && !carregandoAtividades.value) {
+
+    tocarSomConclusao()
+
+  }
+
+  void atualizarAtividade(id, { concluida: true })
+
+}
+
+function desfazer(id: string) { void atualizarAtividade(id, { concluida: false }) }
+
+function iniciarArraste(id: string) { if (!semanaEncerrada.value) atividadeArrastada.value = id }
+
+function soltarAtividade(diaDestino: string) {
+
+  const id = atividadeArrastada.value
+
+  atividadeArrastada.value = null
+
+  if (!id || semanaEncerrada.value) return
+
+  const atividade = atividades.value.find(a => a.id === id)
+
   if (atividade && !atividade.concluida && atividade.dia !== diaDestino) {
+
     void atualizarAtividade(id, { dia: diaDestino })
+
+  }
+
+}
+
+async function mudarSemana(novaSemana: number) {
+
+  if (novaSemana < 1 || novaSemana > 8 || processandoAtividade.value || carregandoAtividades.value || novaSemana === semanaAtual.value) return
+
+  semanaAtual.value = novaSemana
+  mostrarRevisao.value = false
+  erroEncerramento.value = ''
+  mostrarFormulario.value = false
+  atividades.value = []
+
+  await carregarAtividades()
+
+}
+
+async function encerrarSemana() {
+  const semana = semanaSelecionada()
+  if (!semana || semana.status === 'encerrada' || encerrandoSemana.value || processandoAtividade.value || carregandoAtividades.value) return
+  erroEncerramento.value = ''
+  if (revisaoComprometimento.value === null || revisaoComprometimento.value < 1 || revisaoComprometimento.value > 5) {
+    erroEncerramento.value = 'Escolha uma nota de comprometimento de 1 a 5.'
+    return
+  }
+  if (!window.confirm(`Encerrar a semana ${semana.numero}? Depois disso, suas atividades não poderão ser alteradas.`)) return
+  encerrandoSemana.value = true
+  try {
+    const { data: auth, error: erroAuth } = await supabase.auth.getUser()
+    if (erroAuth || !auth.user) throw new Error('Sua sessão expirou. Entre novamente.')
+    const { data, error } = await supabase.from('semanas').update({
+      status: 'encerrada',
+      revisao_resultados: revisaoResultados.value.trim(),
+      revisao_dificuldades: revisaoDificuldades.value.trim(),
+      revisao_aprendizados: revisaoAprendizados.value.trim(),
+      revisao_comprometimento: revisaoComprometimento.value
+    }).eq('id', semana.id).eq('usuario_id', auth.user.id).eq('status', 'aberta')
+      .select('id, status, revisao_resultados, revisao_dificuldades, revisao_aprendizados, revisao_comprometimento').single()
+    if (error) throw error
+    if (!data) throw new Error('Esta semana não está mais aberta.')
+    Object.assign(semana, data)
+    mostrarRevisao.value = false
+    mostrarFormulario.value = false
+    celebrandoSemana.value = true
+  } catch (erro) {
+    erroEncerramento.value = mensagemErro(erro)
+  } finally {
+    encerrandoSemana.value = false
   }
 }
-async function mudarSemana(novaSemana: number) {
-  if (novaSemana < 1 || novaSemana > 8 || processandoAtividade.value || carregandoAtividades.value || novaSemana === semanaAtual.value) return
-  semanaAtual.value = novaSemana
-  atividades.value = []
-  await carregarAtividades()
-}
+
 function proximaSemana() { void mudarSemana(semanaAtual.value + 1) }
+
 function semanaAnterior() { void mudarSemana(semanaAtual.value - 1) }
+
 async function sair() {
+
   const { error } = await supabase.auth.signOut()
+
   if (error) { console.error(error); alert('Não foi possível encerrar a sessão.') }
+
 }
+
 onMounted(() => { void carregarTemporadaAtiva() })
+
 </script>
 
 <template>
@@ -270,21 +613,15 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
   </a>
 
-  <a
+  <a href="#" :class="{ 'menu-ativo': mostrarGerenciamento }"
 
-    href="#"
+     @click.prevent="mostrarGerenciamento = !mostrarGerenciamento"
 
-    @click.prevent="mostrarNovaTemporada = !mostrarNovaTemporada"
-
-  >
+     :title="mostrarGerenciamento ? 'Voltar ao quadro' : 'Gerenciar temporadas'">
 
     <span>🗓️</span>
 
-    <span>
-
-      {{ mostrarNovaTemporada ? 'Fechar temporada' : 'Nova temporada' }}
-
-    </span>
+    <span>{{ mostrarGerenciamento ? 'Voltar ao quadro' : 'Gerenciar temporadas' }}</span>
 
   </a>
 
@@ -294,7 +631,7 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
   <small>TEMPORADA ATUAL</small>
 
-  <strong>{{ nomeTemporada || `Temporada ${temporadaAtual}` }}</strong>
+  <strong>{{ nomeTemporada || 'Nenhuma temporada ativa' }}</strong>
 
   <span>Semana {{ semanaAtual }} de 8</span>
 
@@ -310,7 +647,7 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
           <span class="etiqueta">
 
-  {{ nomeTemporada || `TEMPORADA ${temporadaAtual}` }} · SEMANA {{ semanaAtual }}
+  {{ nomeTemporada || 'SEM TEMPORADA ATIVA' }} · SEMANA {{ semanaAtual }}
 
 </span>
 
@@ -320,7 +657,7 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
         </div>
 
-        <button class="botao-nova-atividade" @click="mostrarFormulario = !mostrarFormulario" :disabled="!temporadaId || carregandoAtividades || processandoAtividade">
+        <button class="botao-nova-atividade" @click="mostrarFormulario = !mostrarFormulario" :disabled="!temporadaId || mostrarGerenciamento || semanaEncerrada || carregandoAtividades || processandoAtividade || encerrandoSemana">
 
   + Nova atividade
 
@@ -332,7 +669,7 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
 </button>
 
-<div v-if="mostrarFormulario" class="formulario-atividade">
+<div v-if="mostrarFormulario && !semanaEncerrada && !mostrarGerenciamento" class="formulario-atividade">
 
   <input
 
@@ -407,20 +744,52 @@ onMounted(() => { void carregarTemporadaAtiva() })
       <p v-if="erroTemporada" style="color:#b91c1c">{{ erroTemporada }}</p>
 
         <p v-if="carregandoTemporada">Carregando temporada...</p>
-        <p v-if="!carregandoTemporada && !temporadaId && !erroTemporada" class="aviso-sync">Nenhuma temporada ativa. Use “Nova temporada” no menu para iniciar.</p>
+
+        <p v-if="!carregandoTemporada && !temporadaId && !erroTemporada" class="aviso-sync">Nenhuma temporada ativa. Abra “Gerenciar temporadas” no menu para iniciar.</p>
+
         <p v-if="erroAtividades" class="aviso-sync">{{ erroAtividades }} <button type="button" @click="carregarAtividades">Tentar novamente</button></p>
+
         <p v-if="carregandoAtividades" class="aviso-sync">Carregando atividades da semana...</p>
+
         <p v-if="processandoAtividade" class="aviso-sync">Salvando alteração na nuvem...</p>
 
-<NovaTemporada
+<section v-if="mostrarGerenciamento" class="gerenciamento-temporadas">
 
-  v-if="mostrarNovaTemporada"
+  <div class="gerenciamento-cabecalho">
 
-  @temporada-criada="mostrarNovaTemporada = false; carregarTemporadaAtiva()"
+    <h2>Gerenciar temporadas</h2>
 
-/>
+    <p v-if="temporadaId">Temporada ativa: <strong>{{ nomeTemporada }}</strong></p>
 
-        <section v-if="!carregandoTemporada && !erroTemporada && temporadaId" class="secao">
+    <p v-else>Não há temporada ativa no momento.</p>
+
+  </div>
+
+  <EncerrarTemporada
+
+    v-if="temporadaId && !carregandoTemporada && !erroTemporada"
+
+    :key="temporadaId"
+
+    :temporada-id="temporadaId"
+
+    :temporada-nome="nomeTemporada"
+
+    @temporada-encerrada="mostrarGerenciamento = false; carregarTemporadaAtiva()"
+
+  />
+
+  <NovaTemporada
+
+    v-if="!temporadaId && !carregandoTemporada && !erroTemporada"
+
+    @temporada-criada="mostrarGerenciamento = false; carregarTemporadaAtiva()"
+
+  />
+
+</section>
+
+        <section v-if="!mostrarGerenciamento && !carregandoTemporada && !erroTemporada && temporadaId" class="secao">
 
   <div class="faixa-destaques">
 
@@ -576,11 +945,29 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
     </div>
 
-
-
   </div>
 
-        <div class="quadro">
+        <section class="objetivos-temporada">
+          <div class="objetivo-destaque">
+            <div class="objetivo-alvo" aria-hidden="true">◎</div>
+            <div>
+              <span class="objetivo-etiqueta">OBJETIVO PRINCIPAL DA TEMPORADA</span>
+              <strong>{{ objetivoPrincipal || 'Objetivo principal ainda não cadastrado.' }}</strong>
+              <small>A direção das suas oito semanas.</small>
+            </div>
+          </div>
+          <div class="marcos-temporada">
+            <span class="objetivo-etiqueta">MARCOS DA TEMPORADA</span>
+            <ol v-if="marcosTemporada.length">
+              <li v-for="(marco, indice) in marcosTemporada" :key="indice">
+                <span class="numero-marco">{{ String(indice + 1).padStart(2, '0') }}</span>
+                <span>{{ marco }}</span>
+              </li>
+            </ol>
+            <p v-else class="sem-marcos">Nenhum marco adicional cadastrado nesta temporada.</p>
+          </div>
+        </section>
+  <div class="quadro">
 
   <div
 
@@ -602,9 +989,9 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
   class="coluna-corpo"
 
-  :class="{ 'coluna-destaque': diaEmDestaque === dia.nome }"
+  :class="{ 'coluna-destaque': !semanaEncerrada && diaEmDestaque === dia.nome }"
 
-  @dragover.prevent="diaEmDestaque = dia.nome"
+  @dragover.prevent="!semanaEncerrada && (diaEmDestaque = dia.nome)"
 
   @dragleave.self="diaEmDestaque = null"
 
@@ -622,15 +1009,15 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
         :key="atividade.id"
 
-        class="cartao"
+        class="cartao" :class="{ 'cartao-bloqueado': semanaEncerrada }"
 
-        draggable="true"
+        :draggable="!semanaEncerrada"
 
         @dragstart="iniciarArraste(atividade.id)"
 
         @dragend="atividadeArrastada = null"
 
-        @click="concluir(atividade.id)"
+        @click="!semanaEncerrada && concluir(atividade.id)"
 
       >
 
@@ -652,7 +1039,7 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
           type="button"
 
-          class="botao-excluir"
+          v-if="!semanaEncerrada" class="botao-excluir"
 
           title="Excluir atividade"
 
@@ -673,10 +1060,56 @@ onMounted(() => { void carregarTemporadaAtiva() })
   </div>
 
 </div>
+      <div class="acoes-abaixo-quadro">
+        <span v-if="semanaEncerrada" class="semana-finalizada">✓ Semana encerrada — somente leitura</span>
+        <button v-else type="button" class="botao-encerrar-semana"
+          :disabled="processandoAtividade || carregandoAtividades || encerrandoSemana"
+          @click="mostrarRevisao = !mostrarRevisao">
+          {{ mostrarRevisao ? 'Cancelar revisão' : 'Encerrar semana' }}
+        </button>
+      </div>
+        <div v-if="mostrarRevisao || semanaEncerrada" class="revisao-semanal">
+    <div class="revisao-topo">
+      <div>
+        <strong>{{ semanaEncerrada ? '✓ Semana encerrada' : 'Revisão da semana' }}</strong>
+        <p>{{ semanaEncerrada ? 'Histórico consolidado — somente leitura.' : 'Ao finalizar, as atividades desta semana ficam bloqueadas.' }}</p>
+      </div>
+
+    </div>
+    <div v-if="mostrarRevisao || semanaEncerrada" class="revisao-corpo">
+      <div class="revisao-numeros">
+        <span><strong>{{ pontos }}</strong> concluídas</span>
+        <span><strong>{{ totalAtividades }}</strong> planejadas</span>
+        <span><strong>{{ percentualRealizado }}%</strong> realizadas</span>
+        <span><strong>{{ pontos }}/{{ metaSemanal }}</strong> meta de pontos</span>
+      </div>
+      <template v-if="semanaEncerrada">
+        <p><strong>Resultados:</strong> {{ semanaSelecionada()?.revisao_resultados || 'Não informado' }}</p>
+        <p><strong>Dificuldades:</strong> {{ semanaSelecionada()?.revisao_dificuldades || 'Não informado' }}</p>
+        <p><strong>Aprendizados:</strong> {{ semanaSelecionada()?.revisao_aprendizados || 'Não informado' }}</p>
+        <p><strong>Comprometimento:</strong> {{ semanaSelecionada()?.revisao_comprometimento ?? 'Não informado' }}/5</p>
+      </template>
+      <form v-else class="revisao-formulario" @submit.prevent="encerrarSemana">
+        <label>Principais resultados<textarea v-model="revisaoResultados" rows="2" placeholder="O que avançou nesta semana?"></textarea></label>
+        <label>Dificuldades<textarea v-model="revisaoDificuldades" rows="2" placeholder="O que atrapalhou a execução?"></textarea></label>
+        <label>Aprendizados<textarea v-model="revisaoAprendizados" rows="2" placeholder="O que vale levar para a próxima semana?"></textarea></label>
+        <label>Comprometimento (1 a 5)
+          <select v-model.number="revisaoComprometimento" required>
+            <option :value="null" disabled>Escolha uma nota</option>
+            <option v-for="nota in 5" :key="nota" :value="nota">{{ nota }}</option>
+          </select>
+        </label>
+        <p v-if="erroEncerramento" class="erro-revisao">{{ erroEncerramento }}</p>
+        <button type="submit" class="botao-encerrar-semana" :disabled="encerrandoSemana || processandoAtividade || carregandoAtividades">
+          {{ encerrandoSemana ? 'Encerrando...' : 'Confirmar encerramento' }}
+        </button>
+      </form>
+    </div>
+  </div>
 
       </section>
 
-      <section v-if="temporadaId && !carregandoTemporada && !erroTemporada" class="done">
+      <section v-if="!mostrarGerenciamento && temporadaId && !carregandoTemporada && !erroTemporada" class="done">
 
         <div class="done-cabecalho">
 
@@ -708,7 +1141,7 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
             class="done-cartao"
 
-            @click="desfazer(atividade.id)"
+            @click="!semanaEncerrada && desfazer(atividade.id)" :disabled="semanaEncerrada"
 
           >
 
@@ -720,7 +1153,7 @@ onMounted(() => { void carregarTemporadaAtiva() })
 
             <span>{{ atividade.nome }}</span>
 
-            <span class="done-remover">↩</span>
+            <span v-if="!semanaEncerrada" class="done-remover">↩</span>
 
           </button>
 
@@ -735,6 +1168,23 @@ onMounted(() => { void carregarTemporadaAtiva() })
       </section>
 
     </main>
+
+  </div>
+
+  <Celebracao v-if="celebrandoSemana" tipo="semana" @terminou="celebrandoSemana = false" />
+  <div v-if="mostrarCheckConcluido" class="check-concluido" aria-label="Atividade concluída" role="status">
+
+    <div class="check-circulo">
+
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+
+        <path d="M15 33 L27 45 L50 20" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+
+      </svg>
+
+    </div>
+
+    <strong class="check-texto">Atividade concluída!</strong>
 
   </div>
 
@@ -2367,5 +2817,126 @@ onMounted(() => { void carregarTemporadaAtiva() })
 }
 
 .aviso-sync { padding: 12px 16px; margin: 12px 0; background: #fff7ed; border: 1px solid #fed7aa; color: #92400e; border-radius: 10px; font-size: 13px; }
+
 .aviso-sync button { margin-left: 8px; cursor: pointer; }
+
+.gerenciamento-temporadas { padding: 8px 0 30px; }
+
+.gerenciamento-cabecalho { max-width: 650px; margin: 0 auto 10px; }
+
+.gerenciamento-cabecalho h2 { font-size: 22px; color: #25334c; margin: 8px 0; }
+
+.gerenciamento-cabecalho p { font-size: 14px; color: #64748b; }
+
+.menu a { cursor: pointer; text-decoration: none; }
+
+.sidebar-recolhida .menu a span:first-child { display: inline; }
+
+.check-concluido {
+
+  position: fixed; inset: 0; z-index: 10000; pointer-events: none;
+
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+
+  gap: 18px;
+
+  animation: check-sumir 1.1s ease-out both;
+
+}
+
+.check-texto {
+
+  color: #17233b;
+
+  font-size: 22px;
+
+  font-weight: 800;
+
+  letter-spacing: -.3px;
+
+  text-align: center;
+
+  text-shadow: 0 1px 8px rgba(255,255,255,.9);
+
+  animation: check-entrar 1.1s cubic-bezier(.2, .8, .2, 1) both;
+
+}
+
+.check-circulo {
+
+  width: 112px; height: 112px; border-radius: 50%;
+
+  background: #20bf91; color: white;
+
+  box-shadow: 0 12px 36px rgba(22, 163, 116, .24);
+
+  display: grid; place-items: center;
+
+  animation: check-entrar 1.1s cubic-bezier(.2, .8, .2, 1) both;
+
+}
+
+.check-circulo svg { width: 65px; height: 65px; }
+
+.check-circulo path { stroke-dasharray: 70; stroke-dashoffset: 70; animation: check-tracar .38s ease-out .14s forwards; }
+
+@keyframes check-entrar {
+
+  0% { transform: scale(.5); opacity: 0; }
+
+  25% { transform: scale(1.08); opacity: 1; }
+
+  38%, 72% { transform: scale(1); opacity: 1; }
+
+  100% { transform: scale(.92); opacity: 0; }
+
+}
+
+@keyframes check-tracar { to { stroke-dashoffset: 0; } }
+
+@keyframes check-sumir { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+
+  .check-concluido, .check-circulo, .check-circulo path { animation: none; }
+
+}
+
+.revisao-semanal { background: #fff; border: 1px solid #e3eaf5; border-radius: 14px; padding: 18px 20px; margin: 0 0 22px; }
+.revisao-topo { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+.revisao-topo strong { font-size: 15px; color: #25334c; }
+.revisao-topo p { color: #8290a5; font-size: 12px; margin: 6px 0 0; }
+.botao-encerrar-semana { border: 0; border-radius: 9px; padding: 11px 16px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
+.botao-encerrar-semana:disabled { opacity: .5; cursor: not-allowed; }
+.revisao-corpo { border-top: 1px solid #e8edf5; padding-top: 18px; margin-top: 18px; }
+.revisao-numeros { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.revisao-numeros span { background: #edf3ff; padding: 10px 13px; border-radius: 9px; font-size: 12px; color: #52627e; }
+.revisao-numeros strong { color: #25334c; }
+.revisao-corpo > p { color: #52627e; font-size: 13px; white-space: pre-wrap; }
+.revisao-formulario { display: grid; gap: 12px; max-width: 720px; }
+.revisao-formulario label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: #25334c; }
+.revisao-formulario textarea, .revisao-formulario select { border: 1px solid #d8e1ed; border-radius: 9px; padding: 11px; font: inherit; background: white; color: #25334c; }
+.revisao-formulario select { max-width: 220px; }
+.revisao-formulario button { justify-self: start; }
+.erro-revisao { color: #b91c1c; font-size: 13px; }
+.cartao-bloqueado { cursor: default !important; opacity: .85; }
+.cartao-bloqueado:hover { transform: none; }
+.done-cartao:disabled { cursor: default; opacity: 1; }
+@media(max-width:700px) { .revisao-topo { flex-direction: column; align-items: flex-start; } }
+.objetivos-temporada { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap:22px; padding:20px 24px; background:#f0f5ff; border:1px solid #dce7fc; border-radius:15px; margin:0 0 22px; }
+.objetivo-destaque { display:flex; align-items:center; gap:18px; min-width:0; }
+.objetivo-alvo { width:58px; height:58px; border-radius:16px; flex-shrink:0; display:grid; place-items:center; background:#e0ebff; color:#2563eb; font-size:50px; line-height:1; }
+.objetivo-destaque > div:last-child { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.objetivo-destaque strong { font-size:16px; line-height:1.45; color:#172b4d; white-space:pre-wrap; overflow-wrap:anywhere; }
+.objetivo-destaque small { font-size:12px; color:#8290a5; }
+.objetivo-etiqueta { font-size:10px; font-weight:800; letter-spacing:.7px; color:#3268d7; }
+.marcos-temporada { border-left:1px solid #cfddf5; padding-left:22px; min-width:0; }
+.marcos-temporada ol { list-style:none; padding:0; margin:12px 0 0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 20px; }
+.marcos-temporada li { display:flex; align-items:flex-start; gap:10px; color:#25334c; font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
+.numero-marco { font-size:11px; color:#2563eb; font-weight:800; background:white; border-radius:7px; padding:5px 7px; }
+.sem-marcos { font-size:12px; color:#8290a5; }
+.acoes-abaixo-quadro { display:flex; justify-content:flex-end; margin:0 0 14px; }
+.semana-finalizada { font-size:12px; color:#128864; font-weight:700; padding:10px; }
+@media(max-width:1000px) { .objetivos-temporada { grid-template-columns:1fr; } .marcos-temporada { border-left:0; border-top:1px solid #cfddf5; padding:15px 0 0; } }
+@media(max-width:650px) { .marcos-temporada ol { grid-template-columns:1fr; } }
 </style>
